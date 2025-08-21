@@ -1,0 +1,397 @@
+---
+title: "FinalProjQuarto"
+format: html
+---
+
+# Introduction
+
+Artificial Intelligence (AI) data centers are proliferating rapidly to support growing computational demands, particularly with the expansion of generative AI applications. These facilities are highly resource-intensive, consuming large amounts of energy and water for cooling purposes. Despite this, data centers are often sited in regions already facing significant water stress, exacerbating local resource scarcity (And The West 2025; Department of Energy 2025).
+
+The most popular U.S. data center locations are concentrated in Northern Virginia and Northern California, with substantial infrastructure in Illinois, New York/New Jersey, and Texas (Data Center Map n.d.). These regions not only host critical digital infrastructure but are also grappling with chronic water scarcity, amplifying tensions between industrial demand and public resource availability. Public scrutiny has grown in recent years, as seen in controversies surrounding Meta’s data center water usage (Southern Environmental Law Center 2025; New York Times 2025).
+
+“The drinking water used in data centers is often treated with chemicals to prevent corrosion and bacterial growth, rendering it unsuitable for human consumption or agricultural use. This means that not only are data centers consuming large quantities of drinking water, but they are also effectively removing it from the local water cycle” (University of Tulsa 2025).
+
+Water pricing structures further complicate this issue. Since water rates are often determined by public authorities based on factors like infrastructure maintenance and treatment costs, “tech companies, such as those operating data centers, pay the same amount for water regardless of their consumption levels” (University of Tulsa 2025). Consequently, these companies can sometimes secure advantageous rates or benefit from pricing systems that fail to account for the true marginal costs of their water consumption. This reduces the financial incentive for data center operators to implement water-saving technologies or more sustainable cooling systems, as they do not bear the full economic burden of their water use (University of Tulsa 2024).
+
+### Reserach Question:
+
+To what extent are AI data centers concentrated in water-stressed regions in the U.S.?
+
+# Data
+
+This study integrates two primary datasets: (1) AI Data Center counts by U.S. state and (2) state-level water stress indicators from the World Resources Institute’s Aqueduct Water Risk Atlas. Together, they enable a cross-sectional analysis of infrastructure density and environmental vulnerability.
+
+Data Center Quantity by State Data was extracted from [USADataCenterMap.com](USADataCenterMap.com). This website contains 3,948 data centers listed from 51 states in the USA. A paywall prevented further data extraction other than quantity per state.
+
+Data on Baseline Annual Water Usage and Stress by State was extracted from the Water Risk Atlas (Aqueduct 4.0), by the World Resources Institute ([doi.org/10.46830/writn.23.00061](doi.org/10.46830/writn.23.00061)). The datset contains projected water risk indicators at the annual time step. The key indicator pulled from this dataset was "bws_score", baseline water stress mapped to a \[0-5\] scale). This score calculates the quantiles and use linear interpolation to remap the raw values to 0-5 scores from the raw values, to maintain the distribution of the data.
+
+# METHODOLOGY
+
+The data workflow involves cleaning and aggregating water stress metrics, categorizing states by data center density, and calculating composite risk indices. The visualizations are designed to reveal spatial patterns, proportional stress distributions, and identify high-risk states where AI infrastructure intersects with water scarcity, and demand, i.e. overall water stress.
+
+## Import Data & Packages
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(maps)
+
+# Load the CSV file of datacenterqty by state
+data_centers <- read_csv("Data/DataCentersUSAqty.csv")
+
+# Load the CSV file of water stress index 
+WSI <- read_csv("Data/Aqueduct40_baseline_annual_y2023m07d05.csv")
+```
+
+## Data Cleaning Using Tidyverse
+
+```{r}
+# Clean and prepare datacenterqty by state
+data_centers_clean <- data_centers %>%
+  select(State, `Data Centers`) %>%
+  filter(!is.na(`Data Centers`)) %>%
+  filter(!grepl("Total", State)) %>%  # Remove "Total" row
+  arrange(desc(`Data Centers`))
+
+#Filter and clean WSI by US State
+WSI <- WSI %>%
+  filter(name_0 == "United States")
+
+#clean bws_score: remove -9999 as it is null score. 
+WSI <- WSI %>%
+    filter(!(bws_score == "-9999"))
+
+# Round bws_score to the nearest whole number
+WSI <- WSI %>%
+  mutate(bws_score = as.numeric(bws_score),
+         bws_score_rounded = round(bws_score))
+
+#check work where bws_score is NOT a whole number
+WSI %>%
+  filter(bws_score %% 1 != 0) %>%
+  mutate(bws_score_rounded = round(bws_score)) %>%
+  select(bws_score, bws_score_rounded)
+
+# Check result
+WSI%>% select(bws_score, bws_score_rounded) %>% head(10)
+
+#filter again
+bws_rounded <- WSI %>%
+  select(name_1, bws_score, bws_score_rounded)
+
+#aggregate bws_score into 0-5 and one score per state by mean bws_score
+#bws_rounded %>%
+#  group_by(name_1) %>%
+#  summarise(mean_bws_score_rounded = mean(bws_score_rounded))
+
+
+# Group by State and rounded BWS score, count, and compute proportions
+rounded_proportions <- bws_rounded %>%
+  group_by(name_1, bws_score_rounded) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(name_1) %>%
+  mutate(proportion = count / sum(count)) %>%
+  select(-count) %>%
+  pivot_wider(names_from = bws_score_rounded, values_from = proportion, 
+              names_prefix = "Score_", values_fill = 0)
+
+# View result
+print(rounded_proportions)
+
+#pivot rounded porportions
+long_data <- rounded_proportions %>%
+  pivot_longer(cols = starts_with("Score_"), 
+               names_to = "BWS_Score", 
+               values_to = "Proportion")
+
+#further improve visualization by region mapping, ordering states by region rather than alphabetical
+
+#step 1 
+region_mapping <- data.frame(
+  name_1 = c("Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont",
+             "New Jersey", "New York", "Pennsylvania",
+             "Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin", "Iowa", "Kansas", "Minnesota", 
+             "Missouri", "Nebraska", "North Dakota", "South Dakota",
+             "Delaware", "District of Columbia", "Florida", "Georgia", "Maryland", "North Carolina", 
+             "South Carolina", "Virginia", "West Virginia", "Alabama", "Kentucky", "Mississippi", 
+             "Tennessee", "Arkansas", "Louisiana", "Oklahoma", "Texas",
+             "Arizona", "Colorado", "Idaho", "Montana", "Nevada", "New Mexico", "Utah", "Wyoming", 
+             "Alaska", "California", "Hawaii", "Oregon", "Washington"),
+  Region = c(rep("Northeast", 9),
+             rep("Midwest", 12),
+             rep("South", 17),
+             rep("West", 13))
+)
+
+# Step 2: Join Region to long_data
+long_data <- long_data %>%
+  left_join(region_mapping, by = "name_1")
+
+# Step 3: Order States by Region first, then Alphabetically within Region
+long_data <- long_data %>%
+  arrange(Region, name_1) %>%
+  mutate(name_1 = factor(name_1, levels = unique(name_1)))
+```
+
+## Calculations
+
+1.  **Mean and Mode BWS Score** to show overall water stress by state.
+
+```{r}
+# Compute Mean BWS Score per State
+bws_mean <- WSI %>%
+  group_by(name_1) %>%
+  summarise(mean_bws = mean(bws_score, na.rm = TRUE))
+
+# Compute Mode BWS Score per State
+bws_mode <- WSI %>%
+  group_by(name_1, bws_score) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(name_1) %>%
+  slice_max(count, n = 1, with_ties = FALSE) %>%
+  select(name_1, mode_bws = bws_score)
+
+# Merge Mean and Mode together
+bws_summary <- left_join(bws_mean, bws_mode, by = "name_1")
+
+#rename 'name_1' col to 'State' to match data_centers_clean
+bws_summary <- bws_summary %>%
+  rename(State = name_1)
+```
+
+2.  **Proportion% of State with High Stress (BWS ≥ 4)** to highlight states with extreme stress pockets, and to understand how widespread the high stress is.
+
+```{r}
+# Compute % of Areas with BWS >= 4 (High Stress Proportion)
+bws_highstress <- bws_summary %>%
+  group_by(State) %>%
+  summarise(high_stress_pct = mean_bws >= 3.1)
+
+bws_summary <- left_join(bws_highstress, bws_summary, by = "State")
+```
+
+## Final Merge of Data
+
+```{r}
+#rename region_mapping to State instead of name_1
+region_mapping <- region_mapping %>%
+  rename(State = name_1) 
+
+#final merge Data Centers Count, calculations (bws_summary), and State 
+final_merge <- data_centers_clean %>%
+  left_join(bws_summary, by = "State") %>%
+  left_join(region_mapping, by = "State")
+
+```
+
+# VISUALIZATIONS & ANALYSIS
+
+#### Visualization 1 — Data Center Prevalence by State
+
+```{r}
+#VISUALIZATION 1
+# Plot Heatmap-Style Bar Chart
+ggplot(data_centers_clean, aes(x = reorder(State, `Data Centers`), 
+                               y = `Data Centers`, 
+                               fill = `Data Centers`)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Flip to horizontal bar chart
+  scale_fill_gradient(low = "#fee5d9", high = "#a50f15") +  # Reds gradient
+  labs(title = "Number of Data Centers by State (USA)",
+       x = "State",
+       y = "Number of Data Centers") +
+  theme_minimal(base_size = 5)
+```
+
+This heatmap bar chart highlights Virginia, Texas, and California as the top data center hubs. The sharp drop-off after these states indicates a significant centralization of AI infrastructure.
+
+#### Visualization 2 — Proportional Water Stress Scores by State, then Faceted by Region
+
+```{r}
+
+#VISUALIZATION 2
+# Plot stacked bar chart of Rounded BWS Scores by State
+ggplot(long_data, aes(x = name_1, y = Proportion, fill = BWS_Score)) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "YlGnBu", name = "BWS Score Rounded") +
+  labs(title = "Proportion of Rounded BWS Scores by State",
+       x = "State", y = "Proportion") +
+  theme_minimal(base_size = 5) +
+  theme(axis.text.x = element_text(angle = 75, hjust = 1))
+
+
+#Visualization 2.1 with facet wrap by region
+ggplot(long_data, aes(x = name_1, y = Proportion, fill = BWS_Score)) +
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "YlGnBu", name = "BWS Score Rounded") +
+  labs(title = "Proportion of Rounded BWS Scores by State (Faceted by Region)",
+       x = "State", y = "Proportion") +
+  facet_wrap(~ Region, scales = "free_x") +
+  theme_minimal(base_size = 5) +
+  theme(axis.text.x = element_text(angle = 75, hjust = 1))
+```
+
+Many states exhibit a bimodal distribution, with pockets of high and low water stress. Western states such as Arizona and Nevada skew heavily towards high-stress scores.
+
+#### Visualization 3 — Data Centers vs Mean BWS Score
+
+```{r}
+#Visualization 3. Scatter Plot: Data Centers vs. Mean BWS Score
+ggplot(final_merge, aes(x = `Data Centers`, y = mean_bws)) +
+  geom_point(aes(color = Region, shape = as.factor(high_stress_pct)), size = 4) +
+  scale_shape_manual(values = c(16, 17), name = "High Stress State") +
+  labs(title = "Data Centers vs. Mean Water Stress by State",
+       x = "Number of Data Centers",
+       y = "Mean BWS Score") +
+  theme_minimal()
+```
+
+The South, while containing states with extensive data center infrastructure, shows more variability in stress distribution, suggesting both opportunities and vulnerabilities. The West presents cases of both high infrastructure density and extreme water stress levels. Both these regions need to be carefully managed in terms of data infrastructure development and water stress.
+
+#### Visualization 4 — Data Centers in High Water Stress States
+
+```{r}
+#Visualization 4. Bar Chart: Data Centers in High Stress States. This highlights where infrastructure is exposed to critical water stress.
+final_merge %>%
+  filter(high_stress_pct == TRUE) %>%
+  ggplot(aes(x = reorder(State, `Data Centers`), y = `Data Centers`, fill = Region)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Data Centers in High Water Stress States",
+       x = "State", y = "Number of Data Centers") +
+  theme_minimal()
+```
+
+Filtering for states where the mean BWS score exceeds 3.1 reveals infrastructure concentrations in environmentally vulnerable zones. This visualization underscores the exposure of states like Arizona, California, and Texas to compounded environmental and infrastructure risks.
+
+#### Visualization 5 — Composite Risk Index (Data Centers × Mean BWS)
+
+```{r}
+#Visualization 5. Composite Risk Index Bar Chart.  Which states are the riskiest in terms of infrastructure and water stress combined?
+final_merge <- final_merge %>%
+  mutate(CompositeRisk = `Data Centers` * mean_bws)
+
+# Filter out rows where CompositeRisk is NA
+final_merge_filtered <- final_merge %>%
+  filter(!is.na(CompositeRisk))
+
+ggplot(final_merge, aes(x = reorder(State, CompositeRisk), y = CompositeRisk, fill = Region)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Composite Risk Index (Data Centers × Mean BWS)",
+       x = "State", y = "Composite Risk Score") +
+  theme_minimal(base_size = 5) +
+  theme(axis.text.x = element_text(angle = 75, hjust = 1))
+```
+
+Why Multiply Data Centers × Mean BWS? The composite risk index amplifies the intersectionality of infrastructure and environmental stress, positioning Arizona, California, and Texas as priority concern zones for sustainable AI deployment.
+
+-   A state with many data centers but low water stress = Low Composite Risk.
+
+-   A state with few data centers but high water stress = Also Low Composite Risk.
+
+-   A state with many data centers in high water stress zones = High Composite Risk.
+
+#### Visualization 6 — Choropleth Overlay Map
+
+```{r}
+#Visualization 6: Chloropleth Map of Water Stress with Overlay of Data Center Prevelance. 
+# Extract State Centers
+state_centroids <- data.frame(State = tolower(state.name),
+    long = state.center$x,
+    lat = state.center$y)
+
+# Make sure State column is lowercase to match
+final_merge <- final_merge %>%
+  mutate(State_lower = tolower(State))
+
+# Join centroids to final_merge
+final_merge <- final_merge %>%
+  left_join(state_centroids, by = c("State_lower" = "State"))
+
+# Prepare final_merge to match map data format
+final_merge <- final_merge %>%
+  mutate(state_lower = tolower(State))
+
+# Get US states map
+us_states <- map_data("state")
+
+# Join Mean BWS to state polygons (do not merge coordinates into summary data!)
+map_states <- us_states %>%
+  left_join(final_merge %>% select(state_lower, mean_bws), by = c("region" = "state_lower"))
+
+# PLOT: Choropleth (BWS Fill) + Data Center Bubbles Overlay
+ggplot() +
+  # Base Map with Mean BWS Fill
+  geom_polygon(data = map_states, aes(x = long, y = lat, group = group, fill = mean_bws), color = "white") +
+  scale_fill_gradient(low = "lightyellow", high = "darkred", name = "Mean BWS") +
+  
+  # Overlay Data Center Bubbles using centroids
+  geom_point(data = final_merge, aes(x = long, y = lat, size = `Data Centers`),
+             color = "blue", alpha = 0.6, inherit.aes = FALSE) +
+  
+  labs(title = "Data Centers Overlay on Water Stress (Mean BWS)") +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+The choropleth map visualizes state-level water stress gradients, overlaid with data center prevalence represented as proportional bubbles. This spatial visualization makes evident the clustering of AI infrastructure in environmentally stressed zones, while also highlighting regions like the Pacific Northwest that could serve as lower-risk alternatives.
+
+# CONCLUSION
+
+This analysis demonstrates a significant convergence of AI data center infrastructure with regions facing high water stress, particularly in Southern and Western U.S. states. By quantifying and visualizing these intersections, the study provides a data-driven framework to prioritize areas of concern for sustainable infrastructure planning.
+
+The findings suggest that while some high-density data center states like Virginia maintain moderate water stress, others such as Arizona and California are situated in highly vulnerable environmental contexts. These insights are critical for policymakers, utility planners, and corporate ESG strategists aiming to balance infrastructure growth with environmental stewardship.
+
+States with lower water stress but sufficient capacity (e.g., Washington, Oregon) present opportunities for more sustainable AI infrastructure development. However, future expansion strategies must incorporate dynamic water stress projections and enforce transparent reporting of resource usage by tech companies.
+
+#### Future Improvements
+
+To refine this analysis, future work could incorporate:
+
+-   **Data Center Categorization**, distinguishing between data centers based on AI workload intensity (e.g., training hubs vs inference nodes), to better assess resource demands.
+
+-   **Weighted Water Stress Indices**, accounting for population density or land area, to emphasize human-relevant impacts.
+
+-   **Temporal Projections**, using future water stress scenarios (2030, 2050) to anticipate long-term infrastructure risks.
+
+-   **Granular Analysis at the Watershed or County Level**, capturing intra-state disparities that state-level averages might obscure.
+
+-   **Corporate Water Use Disclosures**, if accessible, would significantly enhance the precision of this analysis.
+
+# References
+
+A list of references used in the study.
+
+-   A.T. Kearney. n.d. “AI Data Center Location Attractiveness Index.” Accessed August 6, 2025. <https://www.kearney.com/industry/technology/article/ai-data-center-location-attractiveness-index>. 
+
+-   And The West. 2025. “Thirsty for Power and Water: AI-Crunching Data Centers Sprout across the West.” Stanford University. Accessed August 6, 2025. <https://andthewest.stanford.edu/2025/thirsty-for-power-and-water-ai-crunching-data-centers-sprout-across-the-west/>. 
+
+-   Data Center Map. n.d. “USA Data Center Map.” Accessed August 6, 2025. <https://www.datacentermap.com/usa/>. 
+
+-   David Mytton. 2023. “Fighting Over Who Has the Greenest Public Cloud.” David Mytton Blog. Accessed August 6, 2025. <https://davidmytton.blog/fighting-over-who-has-the-greenest-public-cloud/>. 
+
+-   Department of Energy (DOE). 2025. “DOE Identifies 16 Federal Sites across Country for Data Center and AI Infrastructure.” U.S. Department of Energy. Accessed August 6, 2025. <https://www.energy.gov/articles/doe-identifies-16-federal-sites-across-country-data-center-and-ai-infrastructure#:~:text=GOLDEN%2C%20COLORADO%E2%80%94The%20U.S.%20Department,energy%20generation%20such%20as%20nuclear>. 
+
+-   Kuzma, S., M.F.P. Bierkens, S. Lakshman, T. Luo, L. Saccoccia, E. H. Sutanudjaja, and R. Van Beek. 2023. “Aqueduct 4.0: Updated Decision-Relevant Global Water Risk Indicators.” Technical Note. Washington, DC: World Resources Institute. <https://doi.org/10.46830/writn.23.00061>. 
+
+-   New York Times. 2025. “Meta’s Data Center Water Use Raises Concerns.” New York Times, July 14, 2025. <https://www.nytimes.com/2025/07/14/technology/meta-data-center-water.html>. 
+
+-   Our World in Data. n.d. “Water Use and Stress.” Accessed August 6, 2025. <https://ourworldindata.org/water-use-stress>. 
+
+-   ResearchGate. n.d. “Data Centre Water Consumption.” Accessed August 6, 2025. <https://www.researchgate.net/publication/349381660_Data_centre_water_consumption>. 
+
+-   Southern Environmental Law Center (SELC). 2025. “Environmental Group Requests Water Usage Information for SC Meta Data Center.” Press Release. Accessed August 6, 2025. [https://www.selc.org/press-release/environmental-group-requests-water-usage-information-for-sc-meta-data-center/#:\~:text=The%20data%20center's%20anticipated%20daily,transparency%20about%20their%20water%20use](https://www.selc.org/press-release/environmental-group-requests-water-usage-information-for-sc-meta-data-center/#:~:text=The%20data%20center's%20anticipated%20daily,transparency%20about%20their%20water%20use). 
+
+-   University of Tulsa. 2025. “Data Centers Draining Resources in Water-Stressed Communities.” Accessed August 6, 2025. <https://utulsa.edu/news/data-centers-draining-resources-in-water-stressed-communities/>. 
+
+-   Wall Street Journal (WSJ). 2015. “Data Centers.” Wall Street Journal, June 24, 2015. <https://www.wsj.com/articles/data-centers-1435168386>. 
+
+-   World Resources Institute (WRI). n.d. “Aqueduct Global Maps 4.0 Data.” Accessed August 6, 2025. <https://www.wri.org/data/aqueduct-global-maps-40-data>. 
+
+-   World Resources Institute. n.d. “Data Dictionary, Water Risk Atlas (Aqueduct 4.0).” Accessed August 6, 2025. *GitHub repository*. Baseline Annual dataset documentation. [https://github.com/wri/Aqueduct40/blob/master/data_dictionary_water‑risk‑atlas.md](https://github.com/wri/Aqueduct40/blob/master/data_dictionary_water%E2%80%91risk%E2%80%91atlas.md)
+
+-   Zhang, Baobao, and Allan Dafoe. 2019. “Artificial Intelligence: American Attitudes and Trends.” SSRN Scholarly Paper. Rochester, NY: Social Science Research Network. <https://doi.org/10.2139/ssrn.3312874>. 
